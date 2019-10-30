@@ -1,0 +1,156 @@
+---
+title: "Pvirgatum diversity mapping README"
+author: "JTLovell"
+date: "10/30/2019"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Easy mapping with the PVDIV data
+
+This package contains geographic data layers and some accessory functions to make plotting of the PVDIV data simple. This package is for internal use at HAGSC only. 
+
+# Load and project the GIS data
+
+The package comes with a set of unprojected GIS layers. These data come from publically available sources and the method for making them can be found in the R/data.R script. 
+
+```{r}
+data("geodata", package = "pvdiv.map")
+summary(geodata)
+```
+
+These are cropped to the study region and unprojected, so, a plot of the USA looks crappy. 
+
+```{r}
+plot(geodata$states, main = "raw unprojected map of study region", 
+  border = "lightgrey", lwd = .5, col = "white", bg = "lightblue")
+plot(geodata$countries, add = T)
+plot(geodata$coasts, add = T)
+plot(geodata$great.lakes, col = "lightblue", add = T)
+```
+
+So, lets project the data and make it look more like a map.
+
+```{r}
+proj.layers <- project_layers(geodata = geodata)
+projection <- proj.layers$projection
+proj.layers <- proj.layers$proj.layers
+```
+
+The project_layers function returns the CRS function used to do the projections. This is important and must be applied to any points or other data to be added to the plot.
+
+```{r}
+print(projection)
+```
+
+We can use this projection to remake the above plot. 
+
+```{r}
+plot(proj.layers$states, main = "raw unprojected map of study region", 
+  border = "lightgrey", lwd = .5, col = "white", bg = "lightblue")
+plot(proj.layers$countries, add = T)
+plot(proj.layers$coasts, add = T)
+plot(proj.layers$great.lakes, col = "lightblue", add = T)
+```
+
+# Load and project plant metadata
+
+The package comes with some compiled metadata for each plant. The raw data to make these metadata are stored on the google drive, and the method for making them can be found in the R/data.R script. 
+
+```{r}
+data("plant.metadata.k5", package = "pvdiv.map")
+print(head(plant.metadata.k5))
+```
+
+Like with the layers, we can project the points
+
+```{r}
+extent <- extent(geodata$states)
+k5.metadata <- subset(
+  plant.metadata.k5,
+  !is.na(lat) & !is.na(lon))
+sites <- SpatialPointsDataFrame(
+  coords = k5.metadata[,c("lon","lat")], 
+  data= k5.metadata,
+  proj4string = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"))
+sites.c <- spTransform(
+  sites,
+  CRSobj = projection)
+```
+
+And add the projected points back to the data.table
+
+```{r}
+k5.metadata[,proj.lon := coordinates(sites.c)[,"lon"]]
+k5.metadata[,proj.lat := coordinates(sites.c)[,"lat"]]
+```
+
+# Plot and adjust the position of the points
+
+So, with basic projections, the points look like this. Note that there are lots of overlapping points, particularly on the east coast. 
+
+```{r}
+with(k5.metadata, points(
+  x = proj.lon,
+  y = proj.lat,
+  col = best.col,
+  pch = 16))
+```
+
+So, we can move these points to a non-overlapping grid:
+
+```{r}
+pt.spacing <- (max(k5.metadata$proj.lon) / 60) * pi
+grid.pts <- buffer_ovlpts(
+  pt.buffer = 0,
+  spacing = pt.spacing,
+  bounds = extent(sites.c),
+  pt.coords = coordinates(sites.c))
+
+k5.metadata[,grid.pt.lon := grid.pts$plot.x]
+k5.metadata[,grid.pt.lat := grid.pts$plot.y]
+```
+
+And re-plot
+
+```{r}
+plot(proj.layers$states, main = "raw unprojected map of study region", 
+  border = "lightgrey", lwd = .5, col = "white", bg = "lightblue")
+plot(proj.layers$countries, add = T)
+plot(proj.layers$coasts, add = T)
+plot(proj.layers$great.lakes, col = "lightblue", add = T)
+with(k5.metadata, points(
+   x = grid.pt.lon,
+  y = grid.pt.lat,
+  col = best.col,
+  pch = 16))
+```
+
+# Plot Pies on the map
+
+Last part is just embracing the complexity of the structure by showing proportional population assignment.
+
+```{r}
+pie.radius <- (max(k5.metadata$proj.lon) / (65))
+k5.metadata[,best.fac := factor(best, levels = c("TX", "GC", "MW", "S.EC", "N.EC"))]
+setkey(k5.metadata, best.fac)
+colors <- unique(k5.metadata$best.col)
+
+plot(proj.layers$states, main = "raw unprojected map of study region", 
+  border = "lightgrey", lwd = .5, col = "white", bg = "lightblue")
+plot(proj.layers$countries, add = T)
+plot(proj.layers$coasts, add = T)
+plot(proj.layers$great.lakes, col = "lightblue", add = T)
+with(k5.metadata, draw.pie(
+  x = grid.pt.lon, 
+  y = grid.pt.lat,
+  z = data.matrix(cbind(TX, GC, MW, S.EC, N.EC)),
+  radius = pie.radius,
+  border = F,
+  col = colors))
+```
